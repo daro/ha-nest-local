@@ -27,12 +27,24 @@ Encje pojawiają się, gdy termostat wyśle swój stan. Te, których Twój termo
 
 ## Instalacja
 
-1. Skopiuj katalog `custom_components/nest_local` do `/config/custom_components/` w Home Assistancie
-   (np. przez aplikację Samba, Studio Code Server albo SSH).
-   Możesz też wrzucić to repozytorium na GitHuba i dodać je w HACS jako *custom repository* (typ: Integration).
-2. Zrestartuj Home Assistanta.
-3. **Ustawienia → Urządzenia i usługi → Dodaj integrację → Nest Local**.
-4. Podaj adres IPv4 Home Assistanta (nie `homeassistant.local` – termostat nie rozwiązuje takich nazw)
+### Przez HACS
+
+1. HACS → ⋮ (prawy górny róg) → **Custom repositories**.
+2. Repozytorium: `https://github.com/daro/ha-nest-local`, typ: **Integration** → **Add**.
+3. Wyszukaj w HACS **Nest Local** → **Download**.
+4. Zrestartuj Home Assistanta.
+
+Nowe wersje (wydania na GitHubie) HACS pokaże jako aktualizację.
+
+### Ręcznie
+
+Skopiuj katalog `custom_components/nest_local` do `/config/custom_components/` w Home Assistancie
+(np. przez aplikację Samba share, Studio Code Server albo SSH) i zrestartuj Home Assistanta.
+
+### Konfiguracja
+
+1. **Ustawienia → Urządzenia i usługi → Dodaj integrację → Nest Local**.
+2. Podaj adres IPv4 Home Assistanta (nie `homeassistant.local` – termostat nie rozwiązuje takich nazw)
    i port (domyślnie **9544**; 9543 zajmuje aplikacja NoLongerEvil, jeśli nadal działa).
 
 ## Przepięcie termostatu na Home Assistanta
