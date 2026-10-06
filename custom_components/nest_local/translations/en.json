@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Nest Local",
-        "description": "Home Assistant will act as the cloud server for Nest thermostats running the NoLongerEvil firmware. After setup, set the thermostat's cloudregisterurl to http://<address>:<port>/entry and reboot it.",
+        "description": "Home Assistant will act as the cloud server for Nest thermostats running the NoLongerEvil firmware. After setup, a notification shows the exact address to enter as cloudregisterurl on the thermostat.",
         "data": {
           "host": "Home Assistant IP address",
           "port": "Port"

@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Nest Local",
-        "description": "Home Assistant zastąpi chmurę dla termostatów Nest z firmware NoLongerEvil. Po konfiguracji ustaw w termostacie cloudregisterurl na http://<adres>:<port>/entry i zrestartuj go.",
+        "description": "Home Assistant zastąpi chmurę dla termostatów Nest z firmware NoLongerEvil. Po konfiguracji pojawi się powiadomienie z dokładnym adresem do wpisania w termostacie jako cloudregisterurl.",
         "data": {
           "host": "Adres IP Home Assistanta",
           "port": "Port"
