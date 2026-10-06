@@ -21,7 +21,8 @@ Encje pojawiają się, gdy termostat wyśle swój stan. Te, których Twój termo
 
 ## Wymagania
 
-- Nest Learning Thermostat gen 1 lub 2 z wgranym firmware NoLongerEvil (dostęp SSH do termostatu).
+- Nest Learning Thermostat gen 1 lub 2 z wgranym firmware NoLongerEvil (do przepięcia potrzebne
+  jest lokalne API firmware albo SSH – patrz niżej).
 - Home Assistant 2026.1 lub nowszy (testowane na 2026.2 i 2026.9).
 - Termostat i Home Assistant w tej samej sieci. Ustaw rezerwację DHCP dla HA i dla termostatu.
 
@@ -49,14 +50,54 @@ Skopiuj katalog `custom_components/nest_local` do `/config/custom_components/` w
 
 ## Przepięcie termostatu na Home Assistanta
 
+Ustawienie `cloudregisterurl` termostatu ma wskazywać `http://IP-HA:9544/entry`.
+
+### Skryptem (macOS / Linux)
+
+Z klonu tego repozytorium, na komputerze w tej samej sieci co termostat:
+
+```sh
+bash tools/nest-to-ha.sh 192.168.1.50      # IP termostatu z listy DHCP
+```
+
+Skrypt:
+
+1. sprawdza, czy integracja w HA odpowiada,
+2. prosi o obudzenie termostatu (uśpiony Nest nie odpowiada w sieci) i sprawdza ping, lokalne API
+   firmware (port 8080) i SSH,
+3. ustawia `cloudregisterurl` przez lokalne API, a gdy go nie ma – przez SSH (hasło root,
+   domyślnie `nolongerevil`),
+4. zapisuje poprzedni adres w `~/nest-backup-NUMER.txt` i czeka, aż termostat zgłosi się w HA.
+
+Gdy przepięcie się nie uda, skrypt mówi, co jest nie tak (termostat śpi, jest w innej sieci,
+ma za stary firmware) i co z tym zrobić.
+
+| Polecenie | Co robi |
+|---|---|
+| `bash tools/nest-to-ha.sh --check IP` | tylko diagnostyka, niczego nie zmienia |
+| `bash tools/nest-to-ha.sh --restore` | przywraca poprzedni adres z kopii |
+| `bash tools/nest-to-ha.sh -h` | wszystkie opcje |
+
+Domyślny adres integracji w skrypcie to `192.168.1.10:9544`; inny podaj opcjami `-a` i `-p`.
+
+### Ręcznie
+
 > Najpierw **zapisz obecną wartość `cloudregisterurl`** – to Twoja droga powrotu.
 
-**Sposób A – przeglądarka (API firmware NLE):**
-otwórz `http://IP-TERMOSTATU:8080/cgi-bin/api/settings` i ustaw `cloudregisterurl` na
-`http://IP-HA:9544/entry`. Jeśli termostat działa dłużej niż 30 minut, strona zapyta o hasło –
-jest w pliku `/etc/nestlabs/apikey.txt` na termostacie.
+**Sposób A – lokalne API firmware NLE** (port 8080, firmware NLE od grudnia 2025):
 
-**Sposób B – SSH:**
+```sh
+NEST=IP-TERMOSTATU
+curl -s http://$NEST:8080/cgi-bin/api/settings      # obecny adres – zapisz go
+curl -s -X POST -d '{"initialize":"NUMER_SERYJNY"}' http://$NEST:8080/cgi-bin/api/settings
+curl -s -X POST -d '{"api_key":"KLUCZ","endpoint":"http://IP-HA:9544"}' http://$NEST:8080/cgi-bin/api/settings
+```
+
+Numer seryjny to nazwa hosta termostatu (lista DHCP albo Settings > Technical Info). Pierwszy
+POST zwraca `api_key`, drugi `"status":"new"`. Termostat sam dopisze `/entry` i po ok. 10 s
+zrestartuje swoje oprogramowanie.
+
+**Sposób B – SSH** (firmware NLE od połowy listopada 2025):
 
 ```sh
 ssh root@IP-TERMOSTATU          # domyślne hasło: nolongerevil (chyba że ustawiłeś własne)
@@ -65,13 +106,19 @@ vi /etc/nestlabs/client.config
 reboot
 ```
 
-**Zrestartuj termostat** (jeśli nie zrobił tego `reboot`: przytrzymaj ekran ok. 10 s).
-Pełny stan termostat wysyła tylko po restarcie – bez tego encje się nie pojawią.
-Po chwili w Home Assistancie pojawi się urządzenie *Nest Thermostat* (lub nazwa pokoju z ustawień Nesta).
+**Starszy firmware NLE** (bez API i SSH): wgraj aktualny instalatorem NoLongerEvil i w kreatorze
+wybierz Self-Hosted z adresem i portem integracji.
+
+### Po przepięciu
+
+Pełny stan termostat wysyła po restarcie, więc jeśli encje nie pojawią się w ciągu kilku minut,
+zrestartuj go (przytrzymaj ekran ok. 10 s). Potem w Home Assistancie pojawi się urządzenie
+*Nest Thermostat* (lub nazwa pokoju z ustawień Nesta).
 
 ## Opcje
 
-- **Konfiguruj → zmień adres/port** (reconfigure). Po zmianie zaktualizuj `cloudregisterurl` i zrestartuj termostat.
+- **Konfiguruj → zmień adres/port** (reconfigure). Po zmianie zaktualizuj `cloudregisterurl`
+  (np. `bash tools/nest-to-ha.sh -p NOWY_PORT IP-TERMOSTATU`).
 - **Opcje**: przekazywanie zapytań o pogodę do `weather.nest.com` (temperatura na zewnątrz na ekranie
   termostatu) oraz długość podgrzewania wody.
 
@@ -96,10 +143,12 @@ Po chwili w Home Assistancie pojawi się urządzenie *Nest Thermostat* (lub nazw
 
 Integracja implementuje protokół zgodnie z działającym serwerem NoLongerEvil i dokumentacją
 [nest-thermostat-protocol-docs](https://github.com/cjserio/nest-thermostat-protocol-docs).
-Jest przetestowana automatycznie (66 testów, w tym symulowany termostat po prawdziwym HTTP),
-ale **nie była jeszcze uruchamiana z fizycznym termostatem**. Przy pierwszym uruchomieniu:
+Jest przetestowana automatycznie (symulowany termostat po prawdziwym HTTP, skrypt przepinający
+na modelu API firmware NLE), ale **nie była jeszcze uruchamiana z fizycznym termostatem**.
+Przy pierwszym uruchomieniu:
 
-- zostaw sobie możliwość powrotu (stara wartość `cloudregisterurl`),
+- zostaw sobie możliwość powrotu (stara wartość `cloudregisterurl`; skrypt zapisuje ją sam,
+  a `--restore` ją przywraca),
 - włącz logi debug i sprawdź, czy zmiany z HA docierają do termostatu w ciągu kilku sekund.
 
 ## Diagnostyka
