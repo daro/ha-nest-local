@@ -1,0 +1,459 @@
+"""Connects the Nest protocol server to Home Assistant."""
+
+from __future__ import annotations
+
+import asyncio
+from datetime import timedelta
+import logging
+import time
+from typing import Any
+
+import aiohttp
+from homeassistant.components import persistent_notification
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
+from homeassistant.exceptions import ServiceValidationError
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.dispatcher import async_dispatcher_send
+from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.storage import Store
+
+from .const import (
+    CONF_HOST,
+    CONF_HOT_WATER_BOOST,
+    CONF_PORT,
+    CONF_WEATHER,
+    DEFAULT_HOT_WATER_BOOST,
+    DEFAULT_PORT,
+    DEFAULT_WEATHER,
+    DOMAIN,
+    ECO_AUTO,
+    ECO_MANUAL,
+    ECO_SCHEDULE,
+    MAX_TEMP,
+    MIN_TEMP,
+    NEST_MODE_COOL,
+    NEST_MODE_HEAT,
+    NEST_MODE_RANGE,
+    OFFLINE_AFTER,
+    SAVE_DELAY,
+    SIGNAL_DEVICE_UPDATE,
+    SIGNAL_NEW_DEVICE,
+    STORAGE_VERSION,
+    WATCHDOG_INTERVAL,
+    WEATHER_CACHE_SECONDS,
+    WEATHER_URL,
+)
+from .entity import device_info, registry_device
+from .protocol import BucketStore, DeviceRecord, NestServer, Push
+from .protocol.util import parse_json_field
+
+_LOGGER = logging.getLogger(__name__)
+
+SERVER_VERSION = "nest_local-1"
+# Records created by requests that never led to a state upload are dropped.
+PRUNE_AFTER = 24 * 3600
+
+# Room names for the thermostat's ``where_id`` (used for the device name).
+WHERE_NAMES: dict[str, str] = {
+    "00000000-0000-0000-0000-000100000000": "Entryway",
+    "00000000-0000-0000-0000-000100000001": "Basement",
+    "00000000-0000-0000-0000-000100000002": "Hallway",
+    "00000000-0000-0000-0000-000100000003": "Den",
+    "00000000-0000-0000-0000-000100000004": "Attic",
+    "00000000-0000-0000-0000-000100000005": "Master Bedroom",
+    "00000000-0000-0000-0000-000100000006": "Downstairs",
+    "00000000-0000-0000-0000-000100000007": "Garage",
+    "00000000-0000-0000-0000-000100000009": "Bathroom",
+    "00000000-0000-0000-0000-00010000000a": "Kitchen",
+    "00000000-0000-0000-0000-00010000000b": "Family Room",
+    "00000000-0000-0000-0000-00010000000c": "Living Room",
+    "00000000-0000-0000-0000-00010000000d": "Bedroom",
+    "00000000-0000-0000-0000-00010000000e": "Office",
+    "00000000-0000-0000-0000-00010000000f": "Upstairs",
+    "00000000-0000-0000-0000-000100000010": "Dining Room",
+    "00000000-0000-0000-0000-00010000001a": "Guest Room",
+}
+
+
+def entry_option(entry: ConfigEntry, key: str, default: Any) -> Any:
+    """Read a setting, preferring options over the original data."""
+    if key in entry.options:
+        return entry.options[key]
+    return entry.data.get(key, default)
+
+
+class NestLocalHub:
+    """Owns the protocol server and exposes thermostat state to entities."""
+
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
+        self.hass = hass
+        self.entry = entry
+        self.store = BucketStore()
+        self.server = NestServer(
+            self.store,
+            advertise_host=entry.data[CONF_HOST],
+            port=int(entry.data.get(CONF_PORT, DEFAULT_PORT)),
+            bind_host="0.0.0.0",
+            weather_fetcher=self._fetch_weather,
+            server_version=SERVER_VERSION,
+        )
+        self.hot_water_boost_minutes = int(
+            entry_option(entry, CONF_HOT_WATER_BOOST, DEFAULT_HOT_WATER_BOOST)
+        )
+        self._weather_enabled = bool(entry_option(entry, CONF_WEATHER, DEFAULT_WEATHER))
+        self._weather_cache: dict[str, tuple[float, Any]] = {}
+        self._storage: Store[dict[str, Any]] = Store(
+            hass, STORAGE_VERSION, f"{DOMAIN}.{entry.entry_id}"
+        )
+        self._online: dict[str, bool] = {}
+        self._unsub_watchdog: CALLBACK_TYPE | None = None
+        self._setup_done = False
+
+    # ------------------------------------------------------------- lifecycle
+
+    async def async_start(self) -> None:
+        """Load saved state and start listening for thermostats."""
+        self.store.load(await self._storage.async_load())
+        # Known thermostats get a grace period to reconnect after a restart.
+        self.store.mark_all_seen()
+        for serial in self.store.serials:
+            self._online[serial] = True
+        self.store.on_device_added = self._on_device_added
+        self.store.on_update = self._on_update
+        self.store.on_seen = self._on_seen
+        await self.server.start()
+        self._unsub_watchdog = async_track_time_interval(
+            self.hass, self._async_watchdog, timedelta(seconds=WATCHDOG_INTERVAL)
+        )
+
+    async def async_stop(self) -> None:
+        """Stop the server and save state."""
+        if self._unsub_watchdog:
+            self._unsub_watchdog()
+            self._unsub_watchdog = None
+        await self.server.stop()
+        await self._storage.async_save(self.store.as_dict())
+
+    @callback
+    def _schedule_save(self) -> None:
+        self._storage.async_delay_save(self.store.as_dict, SAVE_DELAY)
+
+    # ---------------------------------------------------------------- events
+
+    @callback
+    def _on_device_added(self, serial: str) -> None:
+        self._online[serial] = True
+        self._schedule_save()
+        async_dispatcher_send(self.hass, SIGNAL_NEW_DEVICE.format(self.entry.entry_id), serial)
+
+    @callback
+    def forget_device(self, serial: str) -> None:
+        """Remove a thermostat that is no longer used."""
+        self.store.remove_device(serial)
+        self._online.pop(serial, None)
+        self._schedule_save()
+
+    @callback
+    def _on_update(self, serial: str, keys: set[str]) -> None:
+        self._schedule_save()
+        if keys & {"info", f"device.{serial}", f"shared.{serial}"}:
+            self._update_device_registry(serial)
+            if not self._setup_done and self.is_ready(serial):
+                self._setup_done = True
+                persistent_notification.async_dismiss(self.hass, f"{DOMAIN}_setup")
+        self._dispatch(serial)
+
+    @callback
+    def _on_seen(self, serial: str) -> None:
+        if not self._online.get(serial):
+            _LOGGER.info("Nest thermostat %s is back online", serial)
+            self._online[serial] = True
+            self._dispatch(serial)
+
+    @callback
+    def _dispatch(self, serial: str) -> None:
+        entry_id = self.entry.entry_id
+        async_dispatcher_send(self.hass, SIGNAL_DEVICE_UPDATE.format(entry_id, serial))
+        # Lets platforms add entities for capabilities that just appeared.
+        async_dispatcher_send(self.hass, SIGNAL_DEVICE_UPDATE.format(entry_id, "any"), serial)
+
+    @callback
+    def _update_device_registry(self, serial: str) -> None:
+        """Keep firmware version and model in the device registry current."""
+        registry = dr.async_get(self.hass)
+        device = registry_device(self.hass, self.entry.entry_id, serial)
+        if device is None:
+            return
+        info = device_info(self, serial)
+        changes = {
+            key: info[key]  # type: ignore[literal-required]
+            for key in ("sw_version", "hw_version", "model_id")
+            if key in info and getattr(device, key) != info[key]  # type: ignore[literal-required]
+        }
+        if changes:
+            registry.async_update_device(device.id, **changes)
+
+    async def _async_watchdog(self, _now: Any = None) -> None:
+        """Mark silent thermostats offline and drop stale queued changes."""
+        self.store.expire_stale()
+        for serial in self.store.prune_unready(PRUNE_AFTER):
+            _LOGGER.debug("Forgetting %s: it never uploaded any state", serial)
+            self._online.pop(serial, None)
+            self._schedule_save()
+        for serial in self.store.serials:
+            online = self._compute_online(serial)
+            if online != self._online.get(serial):
+                self._online[serial] = online
+                if not online:
+                    _LOGGER.warning(
+                        "Nest thermostat %s has not connected for %d minutes",
+                        serial,
+                        OFFLINE_AFTER // 60,
+                    )
+                self._dispatch(serial)
+
+    def _compute_online(self, serial: str) -> bool:
+        record = self.store.device(serial)
+        if record is None:
+            return False
+        if self.server.subscriptions.count(serial) > 0:
+            return True
+        return time.time() - record.last_seen < OFFLINE_AFTER
+
+    # --------------------------------------------------------------- reading
+
+    def is_ready(self, serial: str) -> bool:
+        """True once the thermostat has uploaded its mode (entities can be made)."""
+        record = self.store.device(serial)
+        return record is not None and record.is_ready
+
+    def is_online(self, serial: str) -> bool:
+        """Return True if the thermostat is currently connected."""
+        return self._online.get(serial, False)
+
+    def record(self, serial: str) -> DeviceRecord | None:
+        """Return the protocol record for a thermostat."""
+        return self.store.device(serial)
+
+    def shared(self, serial: str) -> dict[str, Any]:
+        """Effective ``shared`` bucket (setpoints, mode, HVAC state)."""
+        record = self.store.device(serial)
+        return record.bucket_value("shared") if record else {}
+
+    def device(self, serial: str) -> dict[str, Any]:
+        """Effective ``device`` bucket (sensors, settings, capabilities)."""
+        record = self.store.device(serial)
+        return record.bucket_value("device") if record else {}
+
+    def structure(self, serial: str) -> dict[str, Any]:
+        """Effective structure bucket (eco control)."""
+        record = self.store.device(serial)
+        return record.structure_value() if record else {}
+
+    def hvac_partner(self, serial: str) -> dict[str, Any] | None:
+        """Heat Link / boiler data, if the thermostat reports any."""
+        record = self.store.device(serial)
+        return record.first_bucket_value("hvac_partner") if record else None
+
+    def field(self, serial: str, name: str, default: Any = None) -> Any:
+        """Read a field from the shared bucket, falling back to device."""
+        shared = self.shared(serial)
+        if name in shared:
+            return shared[name]
+        return self.device(serial).get(name, default)
+
+    def eco_mode(self, serial: str) -> str | None:
+        """``schedule``, ``manual-eco`` or ``auto-eco``.
+
+        A change requested from Home Assistant that is still on its way wins,
+        so the preset follows the user's choice straight away.
+        """
+        record = self.store.device(serial)
+        structure_key = record.structure_key if record else None
+        if structure_key and self.store.has_pending(serial, structure_key, "manual_eco_all"):
+            return ECO_MANUAL if self.structure(serial).get("manual_eco_all") else ECO_SCHEDULE
+        device = self.device(serial)
+        for key in ("eco", "eco_mode"):
+            raw = device.get(key)
+            parsed = parse_json_field(raw)
+            if parsed and isinstance(parsed.get("mode"), str):
+                return parsed["mode"]
+            if isinstance(raw, str) and raw in (ECO_SCHEDULE, ECO_MANUAL, ECO_AUTO):
+                return raw
+        structure = self.structure(serial)
+        if "manual_eco_all" in structure:
+            return ECO_MANUAL if structure["manual_eco_all"] else ECO_SCHEDULE
+        return None
+
+    def device_name(self, serial: str) -> str:
+        """Human friendly name for the device registry."""
+        shared = self.shared(serial)
+        for key in ("label", "name"):
+            if isinstance(shared.get(key), str) and shared[key].strip():
+                return shared[key].strip()
+        where = WHERE_NAMES.get(str(self.device(serial).get("where_id", "")))
+        if where:
+            return f"Nest {where}"
+        return "Nest Thermostat"
+
+    # -------------------------------------------------------------- commands
+
+    def _send(self, serial: str, changes: list[tuple[str, dict[str, Any]]]) -> None:
+        if not self.is_online(serial):
+            _LOGGER.info(
+                "Nest thermostat %s is offline; the change will be sent when it reconnects",
+                serial,
+            )
+        pushes: list[Push] = [
+            self.store.server_update(serial, key, fields) for key, fields in changes
+        ]
+        delivered = self.server.push(serial, pushes)
+        _LOGGER.debug(
+            "%s: queued %s (%d open connections)",
+            serial,
+            [key for key, _ in changes],
+            delivered,
+        )
+
+    def _require(self, serial: str, condition: bool, translation_key: str) -> None:
+        if not condition:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key=translation_key,
+                translation_placeholders={"serial": serial},
+            )
+
+    def capabilities(self, serial: str) -> tuple[bool, bool]:
+        """Return (can_heat, can_cool). Unknown cooling counts as absent."""
+        can_heat = self.field(serial, "can_heat")
+        can_cool = self.field(serial, "can_cool")
+        return (can_heat is not False, can_cool is True)
+
+    async def async_set_temperature(
+        self,
+        serial: str,
+        *,
+        temperature: float | None = None,
+        low: float | None = None,
+        high: float | None = None,
+    ) -> None:
+        """Change the setpoint (single, or low/high in heat-cool mode)."""
+        fields: dict[str, Any] = {}
+        for name, value in (
+            ("target_temperature", temperature),
+            ("target_temperature_low", low),
+            ("target_temperature_high", high),
+        ):
+            if value is not None:
+                fields[name] = round(min(max(float(value), MIN_TEMP), MAX_TEMP), 2)
+        if not fields:
+            return
+        # Wakes the display so the new setpoint is shown.
+        fields["target_change_pending"] = True
+        self._send(serial, [(f"shared.{serial}", fields)])
+
+    async def async_set_mode(self, serial: str, nest_mode: str) -> None:
+        """Change the HVAC mode (target_temperature_type)."""
+        can_heat, can_cool = self.capabilities(serial)
+        if nest_mode == NEST_MODE_HEAT:
+            self._require(serial, can_heat, "cannot_heat")
+        elif nest_mode == NEST_MODE_COOL:
+            self._require(serial, can_cool, "cannot_cool")
+        elif nest_mode == NEST_MODE_RANGE:
+            self._require(serial, can_heat and can_cool, "cannot_heat_cool")
+        self._send(serial, [(f"shared.{serial}", {"target_temperature_type": nest_mode})])
+
+    async def async_set_eco(self, serial: str, enabled: bool) -> None:
+        """Enter or leave eco mode."""
+        now_s = int(time.time())
+        structure_key = self.store.structure_key_for(serial)
+        if enabled:
+            # Withdraw the parts of an earlier "leave eco" that have not
+            # reached the thermostat yet; they would cancel this request.
+            self.store.cancel_pending(serial, structure_key, ["away"])
+            self.store.cancel_pending(serial, f"device.{serial}", ["eco"])
+            self._send(
+                serial,
+                [(structure_key, {"manual_eco_all": True, "manual_eco_timestamp": now_s})],
+            )
+            return
+        # Leaving eco: the structure fields are checked against the device
+        # clock; the device-bucket eco mode is applied unconditionally.
+        self._send(
+            serial,
+            [
+                (
+                    structure_key,
+                    {"manual_eco_all": False, "manual_eco_timestamp": now_s, "away": False},
+                ),
+                (
+                    f"device.{serial}",
+                    {
+                        "eco": {
+                            "mode": ECO_SCHEDULE,
+                            "touched_by": 3,
+                            "mode_update_timestamp": now_s,
+                        }
+                    },
+                ),
+            ],
+        )
+
+    async def async_set_fan(self, serial: str, on: bool) -> None:
+        """Run the fan timer or stop it."""
+        self._require(serial, bool(self.device(serial).get("has_fan")), "no_fan")
+        now_s = int(time.time())
+        if on:
+            duration = self.device(serial).get("fan_timer_duration")
+            if not isinstance(duration, int) or duration < 900:
+                duration = 3600
+            fields = {"fan_timer_duration": duration, "fan_timer_timeout": now_s + duration}
+        else:
+            fields = {"fan_timer_timeout": 0}
+        self._send(serial, [(f"device.{serial}", fields)])
+
+    async def async_set_hot_water_boost(self, serial: str, minutes: int) -> None:
+        """Start (minutes > 0) or cancel a hot water boost."""
+        self._require(
+            serial,
+            bool(self.device(serial).get("has_hot_water_control")),
+            "no_hot_water",
+        )
+        end = int(time.time()) + minutes * 60 if minutes > 0 else 0
+        self._send(serial, [(f"device.{serial}", {"hot_water_boost_time_to_end": end})])
+
+    async def async_set_hot_water_mode(self, serial: str, mode: str) -> None:
+        """Set the hot water mode (``schedule`` or ``off``)."""
+        self._require(
+            serial,
+            bool(self.device(serial).get("has_hot_water_control")),
+            "no_hot_water",
+        )
+        self._send(serial, [(f"device.{serial}", {"hot_water_mode": mode})])
+
+    # --------------------------------------------------------------- weather
+
+    async def _fetch_weather(self, query_string: str) -> Any:
+        """Proxy the thermostat's weather request to Nest's weather service."""
+        if not self._weather_enabled:
+            return None
+        cached = self._weather_cache.get(query_string)
+        if cached and time.monotonic() - cached[0] < WEATHER_CACHE_SECONDS:
+            return cached[1]
+        # weather.nest.com uses Nest's private certificate authority.
+        session = async_get_clientsession(self.hass, verify_ssl=False)
+        url = f"{WEATHER_URL}?{query_string}" if query_string else WEATHER_URL
+        try:
+            async with asyncio.timeout(15):
+                async with session.get(url) as response:
+                    response.raise_for_status()
+                    data = await response.json(content_type=None)
+        except (aiohttp.ClientError, TimeoutError, ValueError) as err:
+            _LOGGER.debug("Weather request failed: %s", err)
+            return cached[1] if cached else None
+        if len(self._weather_cache) > 20:
+            self._weather_cache.clear()
+        self._weather_cache[query_string] = (time.monotonic(), data)
+        return data

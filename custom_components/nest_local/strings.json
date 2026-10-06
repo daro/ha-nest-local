@@ -1,0 +1,155 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Nest Local",
+        "description": "Home Assistant will act as the cloud server for Nest thermostats running the NoLongerEvil firmware. After setup, set the thermostat's cloudregisterurl to http://<address>:<port>/entry and reboot it.",
+        "data": {
+          "host": "Home Assistant IP address",
+          "port": "Port"
+        },
+        "data_description": {
+          "host": "IPv4 address of this Home Assistant on your network. The thermostat cannot resolve names like homeassistant.local.",
+          "port": "TCP port the thermostat connects to. Choose another one if the NoLongerEvil app is still running on 9543."
+        }
+      },
+      "reconfigure": {
+        "title": "Nest Local",
+        "description": "If you change the address or port, update cloudregisterurl on the thermostat and reboot it.",
+        "data": {
+          "host": "Home Assistant IP address",
+          "port": "Port"
+        },
+        "data_description": {
+          "host": "IPv4 address of this Home Assistant on your network.",
+          "port": "TCP port the thermostat connects to."
+        }
+      }
+    },
+    "error": {
+      "invalid_host": "Enter an IPv4 address such as 192.168.1.10.",
+      "port_in_use": "This port is already in use on Home Assistant."
+    },
+    "abort": {
+      "single_instance_allowed": "Nest Local is already set up. One server handles all thermostats.",
+      "reconfigure_successful": "Settings saved. Update cloudregisterurl on the thermostat if the address changed."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Nest Local options",
+        "data": {
+          "weather_proxy": "Pass weather requests to Nest's weather service",
+          "hot_water_boost_minutes": "Hot water boost length (minutes)"
+        },
+        "data_description": {
+          "weather_proxy": "Lets the thermostat show the outdoor temperature. Uses weather.nest.com.",
+          "hot_water_boost_minutes": "Used by the hot water boost switch."
+        }
+      }
+    }
+  },
+  "entity": {
+    "climate": {
+      "thermostat": {
+        "state_attributes": {
+          "eco_mode": {
+            "name": "Eco mode",
+            "state": {
+              "schedule": "Schedule",
+              "manual-eco": "Manual eco",
+              "auto-eco": "Automatic eco"
+            }
+          },
+          "waiting_for_thermostat": {
+            "name": "Waiting for thermostat"
+          }
+        }
+      }
+    },
+    "sensor": {
+      "outdoor_temperature": {
+        "name": "Outdoor temperature"
+      },
+      "time_to_target": {
+        "name": "Target reached at"
+      },
+      "battery_voltage": {
+        "name": "Battery voltage"
+      },
+      "backplate_temperature": {
+        "name": "Backplate temperature"
+      },
+      "wifi_signal": {
+        "name": "Wi-Fi signal"
+      },
+      "ip_address": {
+        "name": "IP address"
+      },
+      "eco_temperature_low": {
+        "name": "Eco temperature"
+      },
+      "boiler_water_temperature": {
+        "name": "Boiler water temperature"
+      },
+      "boiler_setpoint": {
+        "name": "Boiler setpoint"
+      },
+      "boiler_modulation": {
+        "name": "Boiler modulation"
+      }
+    },
+    "binary_sensor": {
+      "heating": {
+        "name": "Heating"
+      },
+      "cooling": {
+        "name": "Cooling"
+      },
+      "fan": {
+        "name": "Fan"
+      },
+      "hot_water": {
+        "name": "Hot water"
+      },
+      "boiler_flame": {
+        "name": "Boiler flame"
+      }
+    },
+    "switch": {
+      "hot_water_boost": {
+        "name": "Hot water boost"
+      }
+    },
+    "select": {
+      "hot_water_mode": {
+        "name": "Hot water mode",
+        "state": {
+          "schedule": "Schedule",
+          "off": "Off"
+        }
+      }
+    }
+  },
+  "exceptions": {
+    "cannot_heat": {
+      "message": "Thermostat {serial} is not wired for heating."
+    },
+    "cannot_cool": {
+      "message": "Thermostat {serial} is not wired for cooling."
+    },
+    "cannot_heat_cool": {
+      "message": "Thermostat {serial} needs both heating and cooling for heat/cool mode."
+    },
+    "no_fan": {
+      "message": "Thermostat {serial} does not control a fan."
+    },
+    "no_hot_water": {
+      "message": "Thermostat {serial} does not control hot water."
+    },
+    "port_in_use": {
+      "message": "Cannot listen on port {port}: {error}"
+    }
+  }
+}

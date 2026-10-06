@@ -1,0 +1,155 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Nest Local",
+        "description": "Home Assistant zastąpi chmurę dla termostatów Nest z firmware NoLongerEvil. Po konfiguracji ustaw w termostacie cloudregisterurl na http://<adres>:<port>/entry i zrestartuj go.",
+        "data": {
+          "host": "Adres IP Home Assistanta",
+          "port": "Port"
+        },
+        "data_description": {
+          "host": "Adres IPv4 tego Home Assistanta w sieci lokalnej. Termostat nie rozwiązuje nazw typu homeassistant.local.",
+          "port": "Port TCP, z którym łączy się termostat. Wybierz inny, jeśli na 9543 nadal działa aplikacja NoLongerEvil."
+        }
+      },
+      "reconfigure": {
+        "title": "Nest Local",
+        "description": "Po zmianie adresu lub portu zaktualizuj cloudregisterurl w termostacie i zrestartuj go.",
+        "data": {
+          "host": "Adres IP Home Assistanta",
+          "port": "Port"
+        },
+        "data_description": {
+          "host": "Adres IPv4 tego Home Assistanta w sieci lokalnej.",
+          "port": "Port TCP, z którym łączy się termostat."
+        }
+      }
+    },
+    "error": {
+      "invalid_host": "Podaj adres IPv4, np. 192.168.1.10.",
+      "port_in_use": "Ten port jest już zajęty na Home Assistancie."
+    },
+    "abort": {
+      "single_instance_allowed": "Nest Local jest już skonfigurowany. Jeden serwer obsługuje wszystkie termostaty.",
+      "reconfigure_successful": "Zapisano. Jeśli zmienił się adres, zaktualizuj cloudregisterurl w termostacie."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Opcje Nest Local",
+        "data": {
+          "weather_proxy": "Przekazuj zapytania o pogodę do usługi pogodowej Nest",
+          "hot_water_boost_minutes": "Czas podgrzewania wody (minuty)"
+        },
+        "data_description": {
+          "weather_proxy": "Pozwala termostatowi pokazywać temperaturę na zewnątrz. Korzysta z weather.nest.com.",
+          "hot_water_boost_minutes": "Używane przez przełącznik podgrzewania wody."
+        }
+      }
+    }
+  },
+  "entity": {
+    "climate": {
+      "thermostat": {
+        "state_attributes": {
+          "eco_mode": {
+            "name": "Tryb eco",
+            "state": {
+              "schedule": "Harmonogram",
+              "manual-eco": "Eco ręczny",
+              "auto-eco": "Eco automatyczny"
+            }
+          },
+          "waiting_for_thermostat": {
+            "name": "Czeka na termostat"
+          }
+        }
+      }
+    },
+    "sensor": {
+      "outdoor_temperature": {
+        "name": "Temperatura na zewnątrz"
+      },
+      "time_to_target": {
+        "name": "Osiągnięcie temperatury"
+      },
+      "battery_voltage": {
+        "name": "Napięcie baterii"
+      },
+      "backplate_temperature": {
+        "name": "Temperatura podstawy"
+      },
+      "wifi_signal": {
+        "name": "Sygnał Wi-Fi"
+      },
+      "ip_address": {
+        "name": "Adres IP"
+      },
+      "eco_temperature_low": {
+        "name": "Temperatura eco"
+      },
+      "boiler_water_temperature": {
+        "name": "Temperatura wody w kotle"
+      },
+      "boiler_setpoint": {
+        "name": "Temperatura zadana kotła"
+      },
+      "boiler_modulation": {
+        "name": "Modulacja kotła"
+      }
+    },
+    "binary_sensor": {
+      "heating": {
+        "name": "Grzanie"
+      },
+      "cooling": {
+        "name": "Chłodzenie"
+      },
+      "fan": {
+        "name": "Wentylator"
+      },
+      "hot_water": {
+        "name": "Ciepła woda"
+      },
+      "boiler_flame": {
+        "name": "Płomień kotła"
+      }
+    },
+    "switch": {
+      "hot_water_boost": {
+        "name": "Podgrzewanie wody"
+      }
+    },
+    "select": {
+      "hot_water_mode": {
+        "name": "Tryb ciepłej wody",
+        "state": {
+          "schedule": "Harmonogram",
+          "off": "Wyłączony"
+        }
+      }
+    }
+  },
+  "exceptions": {
+    "cannot_heat": {
+      "message": "Termostat {serial} nie jest podłączony do ogrzewania."
+    },
+    "cannot_cool": {
+      "message": "Termostat {serial} nie jest podłączony do chłodzenia."
+    },
+    "cannot_heat_cool": {
+      "message": "Tryb grzanie/chłodzenie wymaga, by termostat {serial} sterował ogrzewaniem i chłodzeniem."
+    },
+    "no_fan": {
+      "message": "Termostat {serial} nie steruje wentylatorem."
+    },
+    "no_hot_water": {
+      "message": "Termostat {serial} nie steruje ciepłą wodą."
+    },
+    "port_in_use": {
+      "message": "Nie można nasłuchiwać na porcie {port}: {error}"
+    }
+  }
+}
