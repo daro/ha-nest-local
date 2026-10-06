@@ -173,6 +173,33 @@ def fingerprint(value: Mapping[str, Any]) -> str:
     return hashlib.sha1(payload.encode(), usedforsecurity=False).hexdigest()[:12]
 
 
+def setpoint_in_effect(value: Mapping[str, Any], weekday: int, seconds: int) -> float | None:
+    """The scheduled temperature at a moment (weekday 0 = Monday, seconds after midnight).
+
+    A setpoint holds until the next one, also across the end of the week.
+    """
+    points = read_setpoints(value)
+    if not points:
+        return None
+    current = [point for point in points if (point[0], point[1]) <= (weekday, seconds)]
+    return (current or points)[-1][2]
+
+
+def device_clock_offsets(value: Mapping[str, Any], since: float) -> list[tuple[int, int]]:
+    """(touched_at, touched_tzo) of setpoints edited on the thermostat after ``since``.
+
+    The thermostat stamps every setpoint it writes with its own clock and UTC
+    offset, which shows what time zone it believes it is in.
+    """
+    found: list[tuple[int, int]] = []
+    for _, entry in _entries(value):
+        at = _number(entry.get("touched_at"))
+        tzo = _number(entry.get("touched_tzo"))
+        if at is not None and tzo is not None and at > since:
+            found.append((int(at), int(tzo)))
+    return sorted(found)
+
+
 def _clock(seconds: int) -> str:
     hours, rest = divmod(int(seconds), 3600)
     minutes, secs = divmod(rest, 60)

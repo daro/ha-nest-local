@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator
+import logging
 import socket
 import time
 
@@ -19,6 +20,7 @@ from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import ATTR_ENTITY_ID, STATE_OFF, STATE_ON, STATE_UNAVAILABLE
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ServiceValidationError
+from homeassistant.util import dt as dt_util
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -30,7 +32,7 @@ from custom_components.nest_local.const import (
 )
 from custom_components.nest_local.entity import registry_device
 
-from .fake_nest import SERIAL, FakeNest
+from .fake_nest import SERIAL, FakeNest, own_schedule
 
 CLIMATE = "climate.nest_living_room"
 SHARED = f"shared.{SERIAL}"
@@ -123,7 +125,13 @@ async def test_set_temperature_reaches_thermostat(
     )
     objects = await held.body(timeout=5)
     assert objects[0]["object_key"] == SHARED
-    assert objects[0]["value"] == {"target_temperature": 21.5, "target_change_pending": True}
+    value = objects[0]["value"]
+    touched = value.pop("touched_by")
+    assert value == {"target_temperature": 21.5, "target_change_pending": True}
+    # The thermostat learns that a remote client changed the setpoint.
+    assert touched["touched_by"] == 3
+    assert abs(touched["touched_at"] - time.time()) < 5
+    assert touched["touched_tzo"] == dt_util.now().utcoffset().total_seconds()
     assert thermostat.value("shared")["target_temperature"] == 21.5
     assert hass.states.get(CLIMATE).attributes["temperature"] == 21.5
 
@@ -132,6 +140,30 @@ async def test_set_temperature_reaches_thermostat(
     await hass.async_block_till_done()
     assert hass.states.get(CLIMATE).attributes["temperature"] == 21.5
     assert hass.states.get(CLIMATE).attributes["waiting_for_thermostat"] is False
+    # The thermostat's own write of our value is not a dial turn.
+    held = await thermostat.open_subscribe()
+    await thermostat.put(SHARED, {"target_temperature": 21.5})
+    assert await held.still_open_after(0.3)
+    await held.close()
+
+
+async def test_dial_turn_is_marked_as_a_hold(hass: HomeAssistant, thermostat: FakeNest) -> None:
+    """A setpoint the thermostat wrote itself, away from the schedule, is a dial turn."""
+    held = await thermostat.open_subscribe()
+    await thermostat.put(SHARED, {"target_temperature": 22.5})
+    objects = await held.body(timeout=5)
+    assert [o["object_key"] for o in objects] == [SHARED]
+    touched = objects[0]["value"]["touched_by"]
+    assert set(objects[0]["value"]) == {"touched_by"}  # the setpoint itself is not echoed
+    assert touched["touched_by"] == 2
+    assert abs(touched["touched_at"] - time.time()) < 5
+    assert hass.states.get(CLIMATE).attributes["temperature"] == 22.5
+
+    # A transition to the scheduled temperature (20.0 all day) is not marked.
+    held = await thermostat.open_subscribe()
+    await thermostat.put(SHARED, {"target_temperature": 20.0})
+    assert await held.still_open_after(0.3)
+    await held.close()
 
 
 async def test_change_while_thermostat_sleeps_between_connections(
@@ -318,3 +350,38 @@ async def test_time_to_target_is_anchored(hass: HomeAssistant, thermostat: FakeN
     await thermostat.put(f"device.{SERIAL}", {"current_humidity": 50})
     await hass.async_block_till_done()
     assert hass.states.get("sensor.nest_living_room_target_reached_at").state == first
+
+
+async def test_thermostat_clock_is_compared_with_home_assistant(
+    hass: HomeAssistant,
+    entry: MockConfigEntry,
+    thermostat: FakeNest,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Setpoints edited on the thermostat carry its UTC offset."""
+    hub = entry.runtime_data
+    ours = int(dt_util.now().utcoffset().total_seconds())
+
+    def edited(at: float, tzo: int) -> dict:
+        schedule = own_schedule()
+        schedule["days"]["2"]["0"] |= {"touched_by": 2, "touched_at": int(at), "touched_tzo": tzo}
+        return schedule
+
+    with caplog.at_level(logging.WARNING):
+        await thermostat.put(f"schedule.{SERIAL}", edited(time.time() - 60, ours))
+        await hass.async_block_till_done()
+    assert hub.device_clock_offset[SERIAL] == ours
+    assert "keeps time at" not in caplog.text
+
+    with caplog.at_level(logging.WARNING):
+        await thermostat.put(f"schedule.{SERIAL}", edited(time.time(), ours - 3600))
+        await hass.async_block_till_done()
+    assert hub.device_clock_offset[SERIAL] == ours - 3600
+    assert "keeps time at" in caplog.text
+
+    from custom_components.nest_local.diagnostics import (  # noqa: PLC0415
+        async_get_config_entry_diagnostics,
+    )
+
+    data = await async_get_config_entry_diagnostics(hass, entry)
+    assert data["devices"][SERIAL]["clock_offset"] == ours - 3600

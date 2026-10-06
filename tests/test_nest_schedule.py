@@ -7,10 +7,12 @@ from datetime import time
 from custom_components.nest_local.nest_schedule import (
     build_setpoints,
     describe_schedule,
+    device_clock_offsets,
     fingerprint,
     nest_schedule_value,
     read_setpoints,
     same_schedule,
+    setpoint_in_effect,
 )
 
 H = 3600
@@ -151,3 +153,30 @@ def test_describe() -> None:
             )
         },
     }
+
+
+def test_setpoint_in_effect_holds_until_the_next_one() -> None:
+    value = nest_schedule_value([(0, 10 * H, 21.0), (0, 18 * H, 16.0), (3, 7 * H, 20.0)])
+    assert (
+        setpoint_in_effect(value, 0, 9 * H) == 20.0
+    )  # Monday morning: Thursday's setpoint still holds
+    assert setpoint_in_effect(value, 0, 10 * H) == 21.0
+    assert setpoint_in_effect(value, 0, 17 * H + 59 * 60) == 21.0
+    assert setpoint_in_effect(value, 2, 0) == 16.0
+    assert setpoint_in_effect(value, 6, 23 * H) == 20.0
+    assert setpoint_in_effect({}, 0, 0) is None
+
+
+def test_device_clock_offsets_from_edits() -> None:
+    value = nest_schedule_value([(0, 10 * H, 21.0)])
+    value["days"]["0"]["0"] |= {"touched_by": 2, "touched_at": 1_791_000_000, "touched_tzo": 3600}
+    value["days"]["5"]["0"] = {
+        "type": "HEAT",
+        "time": 0,
+        "entry_type": "continuation",
+        "touched_at": 1_792_000_000,
+        "touched_tzo": 0,
+        "temp": 20.0,
+    }
+    assert device_clock_offsets(value, 0) == [(1_791_000_000, 3600)]  # continuations do not count
+    assert device_clock_offsets(value, 1_791_000_000) == []

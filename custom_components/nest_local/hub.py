@@ -18,6 +18,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.storage import Store
+from homeassistant.util import dt as dt_util
 
 from .const import (
     CONF_HEAT_TEMPERATURE,
@@ -51,6 +52,7 @@ from .const import (
     WEATHER_URL,
 )
 from .entity import device_info, registry_device
+from .nest_schedule import device_clock_offsets, setpoint_in_effect
 from .protocol import BucketStore, DeviceRecord, NestServer, Push
 from .protocol.util import parse_json_field
 from .schedule_sync import ScheduleSync
@@ -63,6 +65,14 @@ PRUNE_AFTER = 24 * 3600
 # Auto-Schedule is switched off again at most this often if the thermostat
 # keeps turning it back on.
 LEARNING_OFF_RETRY = 3600.0
+
+# Who changed the setpoint (shared bucket ``touched_by``). The thermostat does
+# not fill this in itself; it only shows a hold ("until ...") correctly when
+# the server tells it that the dial was turned.
+TOUCHED_BY_DIAL = 2
+TOUCHED_BY_REMOTE = 3
+# A setpoint this close to the schedule's temperature is a schedule transition.
+SETPOINT_TOLERANCE = 0.3
 
 # Room names for the thermostat's ``where_id`` (used for the device name).
 WHERE_NAMES: dict[str, str] = {
@@ -84,6 +94,12 @@ WHERE_NAMES: dict[str, str] = {
     "00000000-0000-0000-0000-000100000010": "Dining Room",
     "00000000-0000-0000-0000-00010000001a": "Guest Room",
 }
+
+
+def _number(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
 
 
 def entry_option(entry: ConfigEntry, key: str, default: Any) -> Any:
@@ -120,6 +136,12 @@ class NestLocalHub:
         self._unsub_watchdog: CALLBACK_TYPE | None = None
         self._setup_done = False
         self._learning_off_sent: dict[str, float] = {}
+        # Last setpoint confirmed by each thermostat, and the last one sent from HA.
+        self._device_target: dict[str, float | None] = {}
+        self._ha_target: dict[str, float] = {}
+        # UTC offset (seconds) the thermostat last used when it edited its schedule.
+        self.device_clock_offset: dict[str, int] = {}
+        self._clock_checked: dict[str, int] = {}
         self.schedule_sync: ScheduleSync | None = None
         if schedule_entity := entry.options.get(CONF_SCHEDULE_ENTITY):
             self.schedule_sync = ScheduleSync(
@@ -186,10 +208,80 @@ class NestLocalHub:
             if not self._setup_done and self.is_ready(serial):
                 self._setup_done = True
                 persistent_notification.async_dismiss(self.hass, f"{DOMAIN}_setup")
+        if f"shared.{serial}" in keys:
+            self._note_device_setpoint(serial)
+        if f"schedule.{serial}" in keys:
+            self._check_device_clock(serial)
         if self.schedule_sync and keys & {f"shared.{serial}", f"schedule.{serial}"}:
             # New state, a mode change or the thermostat's own schedule edit.
             self.schedule_sync.async_request()
         self._dispatch(serial)
+
+    @callback
+    def _note_device_setpoint(self, serial: str) -> None:
+        """Tell the thermostat that a setpoint it wrote itself came from the dial.
+
+        The thermostat changes ``target_temperature`` for two reasons: a
+        schedule transition, or someone turning the dial. Only the latter is a
+        hold, and the thermostat shows it as one only once the server says so.
+        """
+        record = self.store.device(serial)
+        bucket = record.buckets.get(f"shared.{serial}") if record else None
+        target = _number(bucket.value.get("target_temperature")) if bucket else None
+        last = self._device_target.get(serial)
+        self._device_target[serial] = target
+        if last is None or target is None or target == last:
+            return
+        if self._ha_target.get(serial) == target:
+            return  # the thermostat applied our own change
+        if self._matches_schedule(serial, target):
+            return  # a schedule transition: nothing to mark
+        _LOGGER.debug("%s: dial turned to %.1f", serial, target)
+        self._send(serial, [(f"shared.{serial}", {"touched_by": self._touched(TOUCHED_BY_DIAL)})])
+
+    def _matches_schedule(self, serial: str, target: float) -> bool:
+        now = dt_util.now()
+        seconds = now.hour * 3600 + now.minute * 60 + now.second
+        scheduled = setpoint_in_effect(self.schedule(serial), now.weekday(), seconds)
+        return scheduled is not None and abs(scheduled - target) <= SETPOINT_TOLERANCE
+
+    @staticmethod
+    def _touched(who: int) -> dict[str, Any]:
+        now = dt_util.now()
+        offset = now.utcoffset()
+        return {
+            "touched_by": who,
+            "touched_at": int(now.timestamp()),
+            "touched_tzo": int(offset.total_seconds()) if offset else 0,
+        }
+
+    @callback
+    def _check_device_clock(self, serial: str) -> None:
+        """Compare the thermostat's UTC offset with Home Assistant's.
+
+        Schedules run on the thermostat's clock, so a different time zone
+        would shift every setpoint. The offset is visible only on setpoints
+        the user edits on the thermostat itself.
+        """
+        since = self._clock_checked.get(serial, time.time() - 7 * 24 * 3600)
+        edits = device_clock_offsets(self.schedule(serial), since)
+        if not edits:
+            return
+        touched_at, offset = edits[-1]
+        self._clock_checked[serial] = touched_at
+        self.device_clock_offset[serial] = offset
+        moment = dt_util.utc_from_timestamp(touched_at).astimezone(dt_util.get_default_time_zone())
+        ours = moment.utcoffset()
+        ours_seconds = int(ours.total_seconds()) if ours else 0
+        if offset != ours_seconds:
+            _LOGGER.warning(
+                "Thermostat %s keeps time at UTC%+d h while Home Assistant (%s) is at UTC%+d h; "
+                "its schedule runs on its own clock",
+                serial,
+                offset // 3600,
+                self.hass.config.time_zone,
+                ours_seconds // 3600,
+            )
 
     @callback
     def _on_seen(self, serial: str) -> None:
@@ -379,8 +471,11 @@ class NestLocalHub:
                 fields[name] = round(min(max(float(value), MIN_TEMP), MAX_TEMP), 2)
         if not fields:
             return
+        if "target_temperature" in fields:
+            self._ha_target[serial] = fields["target_temperature"]
         # Wakes the display so the new setpoint is shown.
         fields["target_change_pending"] = True
+        fields["touched_by"] = self._touched(TOUCHED_BY_REMOTE)
         self._send(serial, [(f"shared.{serial}", fields)])
 
     async def async_set_mode(self, serial: str, nest_mode: str) -> None:

@@ -386,6 +386,9 @@ class BucketStore:
         eco = fields.get("eco")
         if isinstance(eco, dict) and "mode_update_timestamp" in eco:
             fields["eco"] = {**eco, "mode_update_timestamp": now_s}
+        touched = fields.get("touched_by")
+        if isinstance(touched, dict) and "touched_at" in touched:
+            fields["touched_by"] = {**touched, "touched_at": now_s}
 
     def _pending_push(self, bucket: Bucket) -> Push:
         self._refresh_time_fields(bucket.pending)

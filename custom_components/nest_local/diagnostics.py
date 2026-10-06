@@ -33,6 +33,7 @@ async def async_get_config_entry_diagnostics(
             "adopted_user": record.adopted_user,
             "adopted_structure": record.adopted_structure,
             "eco_mode": hub.eco_mode(serial),
+            "clock_offset": hub.device_clock_offset.get(serial),
             "buckets": {
                 key: {
                     "revision": bucket.revision,

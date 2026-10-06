@@ -47,11 +47,15 @@ DAY = 24 * 3600
 _MODE_OF_TYPE = {"heat": "HEAT", "emergency": "HEAT", "cool": "COOL", "range": "RANGE"}
 
 
-def active_schedule_mode(shared: dict[str, Any]) -> str | None:
-    """The schedule mode the thermostat follows: HEAT, COOL or RANGE."""
-    mode = shared.get("schedule_mode")
-    if isinstance(mode, str) and mode:
-        return mode.upper()
+def active_schedule_mode(shared: dict[str, Any], device: dict[str, Any]) -> str | None:
+    """The schedule mode the thermostat follows: HEAT, COOL or RANGE.
+
+    A real thermostat reports it as ``current_schedule_mode`` in its device
+    bucket; ``schedule_mode`` in the shared bucket is what a server may set.
+    """
+    for value in (shared.get("schedule_mode"), device.get("current_schedule_mode")):
+        if isinstance(value, str) and value:
+            return value.upper()
     return _MODE_OF_TYPE.get(str(shared.get("target_temperature_type", "")).lower())
 
 
@@ -185,9 +189,13 @@ class ScheduleSync:
         if record is None:
             return
         shared = record.buckets.get(f"shared.{serial}")
+        device = record.buckets.get(f"device.{serial}")
         # The thermostat ignores a schedule whose mode is not its own, so this
         # looks at the mode it reported, not at a change still on its way.
-        if active_schedule_mode(shared.value if shared else {}) != "HEAT":
+        if (
+            active_schedule_mode(shared.value if shared else {}, device.value if device else {})
+            != "HEAT"
+        ):
             return
         # What the thermostat holds, plus our copy if it is still on its way.
         if same_schedule(wanted, record.bucket_value("schedule")):

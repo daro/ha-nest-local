@@ -156,7 +156,11 @@ pomocnika wysyła po kilku sekundach.
 ## Co warto wiedzieć
 
 - **Temperatura ustawiona z HA** działa jak przekręcenie pokrętła: obowiązuje do następnego punktu
-  harmonogramu termostatu.
+  harmonogramu termostatu. Integracja oznacza każdą zmianę tak, jak robiła to chmura Nest
+  (z HA – zdalna, pokrętłem – ręczna), dzięki czemu termostat poprawnie pokazuje tymczasową zmianę.
+- **Zegar termostatu**: gdy zmienisz harmonogram na termostacie, integracja porównuje jego strefę
+  czasową ze strefą HA i ostrzega w logu, jeśli się różnią (harmonogram liczy godziny według
+  zegara termostatu).
 - **Eco**: preset *eco* w HA włącza ręczny tryb eco Nesta (`manual_eco_all`); *none* go wyłącza.
   Atrybut `eco_mode` pokazuje, czy eco jest ręczne czy automatyczne.
 - **Termostat offline** (np. słaba bateria): zmiany z HA czekają w kolejce i zostaną wysłane po
