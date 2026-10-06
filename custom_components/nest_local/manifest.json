@@ -1,6 +1,7 @@
 {
   "domain": "nest_local",
   "name": "Nest Local (NoLongerEvil)",
+  "after_dependencies": ["schedule"],
   "codeowners": ["@daro"],
   "config_flow": true,
   "dependencies": ["network"],
@@ -11,5 +12,5 @@
   "loggers": ["custom_components.nest_local"],
   "requirements": [],
   "single_config_entry": true,
-  "version": "0.1.1"
+  "version": "0.2.0"
 }

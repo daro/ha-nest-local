@@ -39,15 +39,25 @@
     "step": {
       "init": {
         "title": "Opcje Nest Local",
+        "description": "Żeby grzać według planu tygodniowego, utwórz pomocnika Harmonogram (Ustawienia → Urządzenia i usługi → Pomocnicy → Utwórz pomocnika → Harmonogram) i zaznacz okresy grzania w poszczególne dni. Wybierz go poniżej: plan zostanie zapisany w termostacie, który będzie go wykonywał także bez Home Assistanta.",
         "data": {
           "weather_proxy": "Przekazuj zapytania o pogodę do usługi pogodowej Nest",
-          "hot_water_boost_minutes": "Czas podgrzewania wody (minuty)"
+          "hot_water_boost_minutes": "Czas podgrzewania wody (minuty)",
+          "schedule_entity": "Tygodniowy harmonogram grzania",
+          "heat_temperature": "Temperatura w okresach grzania",
+          "setback_temperature": "Temperatura poza okresami grzania"
         },
         "data_description": {
           "weather_proxy": "Pozwala termostatowi pokazywać temperaturę na zewnątrz. Korzysta z weather.nest.com.",
-          "hot_water_boost_minutes": "Używane przez przełącznik podgrzewania wody."
+          "hot_water_boost_minutes": "Używane przez przełącznik podgrzewania wody.",
+          "schedule_entity": "Pomocnik Harmonogram. Jego plan zastępuje harmonogram każdego termostatu podłączonego do tej integracji: zmiany zrobione na termostacie zostaną nadpisane, a Auto-Schedule wyłączony. Zostaw puste, żeby termostaty używały własnych harmonogramów.",
+          "heat_temperature": "Dla każdego okresu, który nie ma własnej temperatury (dodatkowe dane: temperature, w °C).",
+          "setback_temperature": "Utrzymywana między okresami, na przykład w nocy."
         }
       }
+    },
+    "error": {
+      "heat_not_above_setback": "Temperatura w okresach grzania musi być wyższa niż poza nimi."
     }
   },
   "entity": {
@@ -150,6 +160,15 @@
     },
     "port_in_use": {
       "message": "Nie można nasłuchiwać na porcie {port}: {error}"
+    },
+    "no_schedule": {
+      "message": "Termostat {serial} nie przesłał jeszcze harmonogramu. Robi to po restarcie."
+    }
+  },
+  "services": {
+    "get_schedule": {
+      "name": "Pobierz harmonogram",
+      "description": "Zwraca tygodniowy harmonogram zapisany w termostacie."
     }
   }
 }

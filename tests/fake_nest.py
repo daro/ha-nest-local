@@ -52,6 +52,34 @@ def initial_state(serial: str = SERIAL) -> dict[str, dict[str, Any]]:
             "time_to_target": 0,
             "where_id": "00000000-0000-0000-0000-00010000000c",
             "eco": {"mode": "schedule", "touched_by": 1, "mode_update_timestamp": 0},
+            "learning_mode": True,
+        },
+        f"schedule.{serial}": own_schedule(),
+    }
+
+
+def own_schedule(morning: int = 7, evening: int = 22) -> dict[str, Any]:
+    """The thermostat's own schedule: warm from morning to evening every day."""
+    return {
+        "ver": 2,
+        "name": "Current Schedule",
+        "schedule_mode": "HEAT",
+        "days": {
+            str(day): {
+                "0": {
+                    "type": "HEAT",
+                    "time": morning * 3600,
+                    "entry_type": "setpoint",
+                    "temp": 20.0,
+                },
+                "1": {
+                    "type": "HEAT",
+                    "time": evening * 3600,
+                    "entry_type": "setpoint",
+                    "temp": 16.0,
+                },
+            }
+            for day in range(7)
         },
     }
 

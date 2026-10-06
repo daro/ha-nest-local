@@ -10,15 +10,19 @@ from homeassistant.data_entry_flow import FlowResultType
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.nest_local.const import (
+    CONF_HEAT_TEMPERATURE,
     CONF_HOST,
     CONF_HOT_WATER_BOOST,
     CONF_PORT,
+    CONF_SCHEDULE_ENTITY,
+    CONF_SETBACK_TEMPERATURE,
     CONF_WEATHER,
     DEFAULT_PORT,
     DOMAIN,
 )
 
 PATCH_SETUP = "custom_components.nest_local.async_setup_entry"
+PATCH_UNLOAD = "custom_components.nest_local.async_unload_entry"
 PATCH_PORT = "custom_components.nest_local.config_flow._port_free"
 
 
@@ -91,7 +95,7 @@ async def test_reconfigure(hass: HomeAssistant) -> None:
 async def test_options(hass: HomeAssistant) -> None:
     entry = MockConfigEntry(domain=DOMAIN, data={CONF_HOST: "192.168.1.10", CONF_PORT: 9544})
     entry.add_to_hass(hass)
-    with patch(PATCH_SETUP, return_value=True):
+    with patch(PATCH_SETUP, return_value=True), patch(PATCH_UNLOAD, return_value=True):
         result = await hass.config_entries.options.async_init(entry.entry_id)
         assert result["type"] is FlowResultType.FORM
         result = await hass.config_entries.options.async_configure(
@@ -99,4 +103,49 @@ async def test_options(hass: HomeAssistant) -> None:
         )
         await hass.async_block_till_done()
     assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert entry.options == {CONF_WEATHER: False, CONF_HOT_WATER_BOOST: 30}
+    assert entry.options == {
+        CONF_WEATHER: False,
+        CONF_HOT_WATER_BOOST: 30,
+        CONF_HEAT_TEMPERATURE: 21.0,
+        CONF_SETBACK_TEMPERATURE: 16.0,
+    }
+
+
+async def test_options_weekly_schedule(hass: HomeAssistant) -> None:
+    entry = MockConfigEntry(domain=DOMAIN, data={CONF_HOST: "192.168.1.10", CONF_PORT: 9544})
+    entry.add_to_hass(hass)
+    chosen = {
+        CONF_WEATHER: True,
+        CONF_HOT_WATER_BOOST: 60,
+        CONF_SCHEDULE_ENTITY: "schedule.heating",
+        CONF_HEAT_TEMPERATURE: 16.0,
+        CONF_SETBACK_TEMPERATURE: 16.0,
+    }
+    with patch(PATCH_SETUP, return_value=True), patch(PATCH_UNLOAD, return_value=True):
+        result = await hass.config_entries.options.async_init(entry.entry_id)
+        result = await hass.config_entries.options.async_configure(result["flow_id"], chosen)
+        assert result["type"] is FlowResultType.FORM
+        assert result["errors"] == {CONF_HEAT_TEMPERATURE: "heat_not_above_setback"}
+
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"], {**chosen, CONF_HEAT_TEMPERATURE: 20.5}
+        )
+        await hass.async_block_till_done()
+        assert result["type"] is FlowResultType.CREATE_ENTRY
+        assert entry.options[CONF_SCHEDULE_ENTITY] == "schedule.heating"
+        assert entry.options[CONF_HEAT_TEMPERATURE] == 20.5
+
+        # Emptying the field turns the weekly schedule off again.
+        result = await hass.config_entries.options.async_init(entry.entry_id)
+        schema = result["data_schema"].schema
+        suggested = next(
+            key.description["suggested_value"] for key in schema if key == CONF_SCHEDULE_ENTITY
+        )
+        assert suggested == "schedule.heating"
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            {key: value for key, value in entry.options.items() if key != CONF_SCHEDULE_ENTITY},
+        )
+        await hass.async_block_till_done()
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert CONF_SCHEDULE_ENTITY not in entry.options

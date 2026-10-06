@@ -20,12 +20,17 @@ from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.storage import Store
 
 from .const import (
+    CONF_HEAT_TEMPERATURE,
     CONF_HOST,
     CONF_HOT_WATER_BOOST,
     CONF_PORT,
+    CONF_SCHEDULE_ENTITY,
+    CONF_SETBACK_TEMPERATURE,
     CONF_WEATHER,
+    DEFAULT_HEAT_TEMPERATURE,
     DEFAULT_HOT_WATER_BOOST,
     DEFAULT_PORT,
+    DEFAULT_SETBACK_TEMPERATURE,
     DEFAULT_WEATHER,
     DOMAIN,
     ECO_AUTO,
@@ -48,12 +53,16 @@ from .const import (
 from .entity import device_info, registry_device
 from .protocol import BucketStore, DeviceRecord, NestServer, Push
 from .protocol.util import parse_json_field
+from .schedule_sync import ScheduleSync
 
 _LOGGER = logging.getLogger(__name__)
 
 SERVER_VERSION = "nest_local-1"
 # Records created by requests that never led to a state upload are dropped.
 PRUNE_AFTER = 24 * 3600
+# Auto-Schedule is switched off again at most this often if the thermostat
+# keeps turning it back on.
+LEARNING_OFF_RETRY = 3600.0
 
 # Room names for the thermostat's ``where_id`` (used for the device name).
 WHERE_NAMES: dict[str, str] = {
@@ -110,6 +119,16 @@ class NestLocalHub:
         self._online: dict[str, bool] = {}
         self._unsub_watchdog: CALLBACK_TYPE | None = None
         self._setup_done = False
+        self._learning_off_sent: dict[str, float] = {}
+        self.schedule_sync: ScheduleSync | None = None
+        if schedule_entity := entry.options.get(CONF_SCHEDULE_ENTITY):
+            self.schedule_sync = ScheduleSync(
+                hass,
+                self,
+                schedule_entity,
+                entry_option(entry, CONF_HEAT_TEMPERATURE, DEFAULT_HEAT_TEMPERATURE),
+                entry_option(entry, CONF_SETBACK_TEMPERATURE, DEFAULT_SETBACK_TEMPERATURE),
+            )
 
     # ------------------------------------------------------------- lifecycle
 
@@ -127,12 +146,16 @@ class NestLocalHub:
         self._unsub_watchdog = async_track_time_interval(
             self.hass, self._async_watchdog, timedelta(seconds=WATCHDOG_INTERVAL)
         )
+        if self.schedule_sync:
+            self.schedule_sync.async_start()
 
     async def async_stop(self) -> None:
         """Stop the server and save state."""
         if self._unsub_watchdog:
             self._unsub_watchdog()
             self._unsub_watchdog = None
+        if self.schedule_sync:
+            self.schedule_sync.async_stop()
         await self.server.stop()
         await self._storage.async_save(self.store.as_dict())
 
@@ -163,6 +186,9 @@ class NestLocalHub:
             if not self._setup_done and self.is_ready(serial):
                 self._setup_done = True
                 persistent_notification.async_dismiss(self.hass, f"{DOMAIN}_setup")
+        if self.schedule_sync and keys & {f"shared.{serial}", f"schedule.{serial}"}:
+            # New state, a mode change or the thermostat's own schedule edit.
+            self.schedule_sync.async_request()
         self._dispatch(serial)
 
     @callback
@@ -213,6 +239,9 @@ class NestLocalHub:
                         OFFLINE_AFTER // 60,
                     )
                 self._dispatch(serial)
+        if self.schedule_sync:
+            # Catches helper edits that did not touch its state.
+            self.schedule_sync.async_request()
 
     def _compute_online(self, serial: str) -> bool:
         record = self.store.device(serial)
@@ -423,6 +452,29 @@ class NestLocalHub:
         )
         end = int(time.time()) + minutes * 60 if minutes > 0 else 0
         self._send(serial, [(f"device.{serial}", {"hot_water_boost_time_to_end": end})])
+
+    @callback
+    def push_schedule(self, serial: str, schedule: dict[str, Any]) -> None:
+        """Replace the thermostat's weekly schedule (always the whole week)."""
+        self._send(serial, [(f"schedule.{serial}", schedule)])
+        self.ensure_learning_off(serial)
+
+    @callback
+    def ensure_learning_off(self, serial: str) -> None:
+        """Turn Auto-Schedule off: it would rewrite the schedule after dial turns."""
+        if self.device(serial).get("learning_mode") is not True:
+            return
+        now = time.monotonic()
+        last = self._learning_off_sent.get(serial)
+        if last is not None and now - last < LEARNING_OFF_RETRY:
+            return
+        self._learning_off_sent[serial] = now
+        self._send(serial, [(f"device.{serial}", {"learning_mode": False})])
+
+    def schedule(self, serial: str) -> dict[str, Any]:
+        """Effective ``schedule`` bucket (the thermostat's weekly schedule)."""
+        record = self.store.device(serial)
+        return record.bucket_value("schedule") if record else {}
 
     async def async_set_hot_water_mode(self, serial: str, mode: str) -> None:
         """Set the hot water mode (``schedule`` or ``off``)."""

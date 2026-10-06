@@ -39,15 +39,25 @@
     "step": {
       "init": {
         "title": "Nest Local options",
+        "description": "To heat on a weekly plan, create a Schedule helper (Settings → Devices & services → Helpers → Create helper → Schedule) and mark the heating periods of each day. Choose it below: the plan is stored on the thermostat, which then follows it even without Home Assistant.",
         "data": {
           "weather_proxy": "Pass weather requests to Nest's weather service",
-          "hot_water_boost_minutes": "Hot water boost length (minutes)"
+          "hot_water_boost_minutes": "Hot water boost length (minutes)",
+          "schedule_entity": "Weekly heating schedule",
+          "heat_temperature": "Temperature in the heating periods",
+          "setback_temperature": "Temperature outside the heating periods"
         },
         "data_description": {
           "weather_proxy": "Lets the thermostat show the outdoor temperature. Uses weather.nest.com.",
-          "hot_water_boost_minutes": "Used by the hot water boost switch."
+          "hot_water_boost_minutes": "Used by the hot water boost switch.",
+          "schedule_entity": "A Schedule helper. Its plan replaces the schedule of every thermostat connected to this integration: changes made on a thermostat are overwritten and Auto-Schedule is turned off. Leave empty to keep the thermostats' own schedules.",
+          "heat_temperature": "Used for every period that has no temperature of its own (additional data: temperature, in °C).",
+          "setback_temperature": "Kept between the periods, for example at night."
         }
       }
+    },
+    "error": {
+      "heat_not_above_setback": "The temperature in the heating periods must be higher than outside them."
     }
   },
   "entity": {
@@ -150,6 +160,15 @@
     },
     "port_in_use": {
       "message": "Cannot listen on port {port}: {error}"
+    },
+    "no_schedule": {
+      "message": "Thermostat {serial} has not sent its weekly schedule yet. It sends it after a restart."
+    }
+  },
+  "services": {
+    "get_schedule": {
+      "name": "Get schedule",
+      "description": "Returns the weekly schedule stored on the thermostat."
     }
   }
 }

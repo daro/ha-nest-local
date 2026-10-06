@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from custom_components.nest_local.protocol.store import (
     MAX_RESEND_ATTEMPTS,
+    SCHEDULE_APPLY_SECONDS,
     BucketStore,
 )
 
 SERIAL = "02AA01AB501203EQ"
 SHARED = f"shared.{SERIAL}"
 DEVICE = f"device.{SERIAL}"
+SCHEDULE = f"schedule.{SERIAL}"
 
 
 class Clock:
@@ -371,3 +373,33 @@ def test_prune_forgets_devices_that_never_uploaded() -> None:
     store.touch(SERIAL)
     assert store.prune_unready(24 * 3600) == ["09AA01AB12345678"]
     assert store.serials == [SERIAL]
+
+
+def test_weekly_schedule_waits_for_the_thermostat() -> None:
+    store, clock = paired_store()
+    store.server_update(SERIAL, SCHEDULE, {"ver": 2, "days": {}})
+    clock.advance(30 * 24 * 3600)
+    store.expire_stale()
+    assert store.device(SERIAL).buckets[SCHEDULE].pending == {"ver": 2, "days": {}}
+
+
+def test_schedule_is_not_resent_while_the_thermostat_applies_it() -> None:
+    store, clock = paired_store()
+    put(store, SCHEDULE, {"ver": 2, "days": {"0": {}}})
+    assert store.handle_subscribe(SERIAL, listing(store)) == []
+    bucket = store.device(SERIAL).buckets[SCHEDULE]
+    old_ts = bucket.timestamp
+    days = {"0": {"0": {"type": "HEAT", "time": 0, "entry_type": "setpoint", "temp": 20.0}}}
+    push = store.server_update(SERIAL, SCHEDULE, {"days": days})
+    store.mark_delivered(SERIAL, [push])
+
+    # The thermostat combines schedule pushes for a while and still lists the old one.
+    clock.advance(10)
+    pushes = store.handle_subscribe(SERIAL, listing(store, {SCHEDULE: old_ts}))
+    assert [p for p in pushes if p.key == SCHEDULE] == []
+    assert bucket.inflight == {"days": days}
+
+    # Not applied after the grace period: sent again.
+    clock.advance(SCHEDULE_APPLY_SECONDS)
+    pushes = store.handle_subscribe(SERIAL, listing(store, {SCHEDULE: old_ts}))
+    assert [p.value for p in pushes if p.key == SCHEDULE] == [{"days": days}]

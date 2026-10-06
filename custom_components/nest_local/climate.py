@@ -19,10 +19,12 @@ from homeassistant.components.climate import (
     HVACMode,
 )
 from homeassistant.const import ATTR_TEMPERATURE, UnitOfTemperature
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant, ServiceResponse, callback
+from homeassistant.exceptions import ServiceValidationError
 
 from . import NestLocalConfigEntry
 from .const import (
+    DOMAIN,
     ECO_AUTO,
     ECO_MANUAL,
     MAX_TEMP,
@@ -40,6 +42,7 @@ from .entity import (
     async_setup_device_entities,
 )
 from .hub import NestLocalHub
+from .nest_schedule import describe_schedule
 
 PARALLEL_UPDATES = 0
 
@@ -275,3 +278,14 @@ class NestClimate(NestLocalEntity, ClimateEntity):
     async def async_set_fan_mode(self, fan_mode: str) -> None:
         """Run the fan timer or stop it."""
         await self.hub.async_set_fan(self.serial, fan_mode == FAN_ON)
+
+    async def async_get_schedule(self) -> ServiceResponse:
+        """The weekly schedule stored on the thermostat (nest_local.get_schedule)."""
+        schedule = self.hub.schedule(self.serial)
+        if not schedule.get("days"):
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="no_schedule",
+                translation_placeholders={"serial": self.serial},
+            )
+        return describe_schedule(schedule)

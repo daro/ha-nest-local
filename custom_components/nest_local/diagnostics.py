@@ -51,5 +51,6 @@ async def async_get_config_entry_diagnostics(
             "port": hub.server.port,
         },
         "options": dict(entry.options),
+        "schedule_sync": hub.schedule_sync.diagnostics() if hub.schedule_sync else None,
         "devices": async_redact_data(devices, REDACT_FIELDS),
     }

@@ -19,6 +19,8 @@ Nest (firmware NLE) ──HTTP, long-poll──▶ Home Assistant :9544 ──�
 
 Encje pojawiają się, gdy termostat wyśle swój stan. Te, których Twój termostat nie obsługuje, nie są tworzone.
 
+Do tego [harmonogram tygodniowy](#harmonogram-tygodniowy) ustawiany z pomocnika *Harmonogram* w HA.
+
 ## Wymagania
 
 - Nest Learning Thermostat gen 1 lub 2 z wgranym firmware NoLongerEvil (do przepięcia potrzebne
@@ -116,18 +118,45 @@ Pełny stan termostat wysyła po restarcie, więc jeśli encje nie pojawią się
 zrestartuj go (przytrzymaj ekran ok. 10 s). Potem w Home Assistancie pojawi się urządzenie
 *Nest Thermostat* (lub nazwa pokoju z ustawień Nesta).
 
+## Harmonogram tygodniowy
+
+Termostat ma własny harmonogram tygodniowy i wykonuje go sam, także gdy Home Assistant nie działa.
+Integracja może go ustawiać z pomocnika **Harmonogram** w HA – na przykład w poniedziałek grzanie
+od 10:00 do 18:00, a we wtorek od 7:00 do 9:00 i od 17:00 do 22:00:
+
+1. **Ustawienia → Urządzenia i usługi → Pomocnicy → Utwórz pomocnika → Harmonogram**. Zaznacz
+   okresy grzania w poszczególne dni.
+2. **Nest Local → ⚙ (opcje)**: wybierz ten harmonogram oraz temperaturę w okresach grzania
+   (np. 21 °C) i poza nimi (np. 16 °C).
+
+Początek każdego okresu staje się punktem harmonogramu Nesta z temperaturą grzania, koniec – punktem
+z temperaturą poza okresami. Integracja zapisuje cały tydzień w termostacie, a każdą zmianę
+pomocnika wysyła po kilku sekundach.
+
+- Okres może mieć własną temperaturę: w jego dodatkowych danych ustaw `temperature: 22` (°C).
+- Harmonogram z HA zastępuje harmonogram termostatu: zmiany zrobione na termostacie zostaną
+  nadpisane, a Auto-Schedule (uczenie się harmonogramu) wyłączony. Plan trafia do wszystkich
+  termostatów podłączonych do integracji.
+- Godziny liczy zegar termostatu: sprawdź, czy pokazuje tę samą godzinę co Home Assistant
+  (ta sama strefa czasowa).
+- Działa, gdy termostat używa harmonogramu grzania. Wyłączony albo offline termostat dostanie
+  harmonogram później – po włączeniu grzania albo po powrocie do sieci.
+- Pusty pomocnik oznacza temperaturę spoza okresów przez cały tydzień. Bez wybranego pomocnika
+  integracja nie zmienia harmonogramu termostatu.
+- Akcja `nest_local.get_schedule` (Narzędzia deweloperskie → Akcje) pokazuje harmonogram zapisany
+  w termostacie.
+
 ## Opcje
 
 - **Konfiguruj → zmień adres/port** (reconfigure). Po zmianie zaktualizuj `cloudregisterurl`
   (np. `bash tools/nest-to-ha.sh -p NOWY_PORT IP-TERMOSTATU`).
 - **Opcje**: przekazywanie zapytań o pogodę do `weather.nest.com` (temperatura na zewnątrz na ekranie
-  termostatu) oraz długość podgrzewania wody.
+  termostatu), długość podgrzewania wody i [harmonogram tygodniowy](#harmonogram-tygodniowy).
 
 ## Co warto wiedzieć
 
-- **Harmonogram zostaje na termostacie.** Temperatura ustawiona z HA działa jak przekręcenie pokrętła:
-  obowiązuje do następnego punktu harmonogramu Nesta. Jeśli chcesz, żeby harmonogram prowadził HA,
-  wyczyść harmonogram na termostacie i ustawiaj temperaturę automatyzacjami.
+- **Temperatura ustawiona z HA** działa jak przekręcenie pokrętła: obowiązuje do następnego punktu
+  harmonogramu termostatu.
 - **Eco**: preset *eco* w HA włącza ręczny tryb eco Nesta (`manual_eco_all`); *none* go wyłącza.
   Atrybut `eco_mode` pokazuje, czy eco jest ręczne czy automatyczne.
 - **Termostat offline** (np. słaba bateria): zmiany z HA czekają w kolejce i zostaną wysłane po
@@ -139,6 +168,7 @@ zrestartuj go (przytrzymaj ekran ok. 10 s). Potem w Home Assistancie pojawi się
 - **Przejście z NoLongerEvil**: jeśli termostat był sparowany z NLE (hosted lub aplikacja),
   integracja przejmuje istniejące parowanie zamiast tworzyć nowe. Aplikację NLE możesz po przepięciu
   zatrzymać.
+- **Ikona** integracji (katalog `brand/`) pokazuje się w Home Assistancie 2026.3 i nowszym.
 
 ## Stan projektu
 

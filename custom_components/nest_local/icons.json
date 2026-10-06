@@ -1,0 +1,7 @@
+{
+  "services": {
+    "get_schedule": {
+      "service": "mdi:calendar-clock"
+    }
+  }
+}

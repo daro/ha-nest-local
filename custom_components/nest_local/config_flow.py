@@ -15,17 +15,42 @@ from homeassistant.config_entries import (
     OptionsFlowWithReload,
 )
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.selector import (
+    EntitySelector,
+    EntitySelectorConfig,
+    NumberSelector,
+    NumberSelectorConfig,
+    NumberSelectorMode,
+)
 import voluptuous as vol
 
 from .const import (
+    CONF_HEAT_TEMPERATURE,
     CONF_HOST,
     CONF_HOT_WATER_BOOST,
     CONF_PORT,
+    CONF_SCHEDULE_ENTITY,
+    CONF_SETBACK_TEMPERATURE,
     CONF_WEATHER,
+    DEFAULT_HEAT_TEMPERATURE,
     DEFAULT_HOT_WATER_BOOST,
     DEFAULT_PORT,
+    DEFAULT_SETBACK_TEMPERATURE,
     DEFAULT_WEATHER,
     DOMAIN,
+    MAX_TEMP,
+    MIN_TEMP,
+    TEMP_STEP,
+)
+
+TEMPERATURE_SELECTOR = NumberSelector(
+    NumberSelectorConfig(
+        min=MIN_TEMP,
+        max=MAX_TEMP,
+        step=TEMP_STEP,
+        unit_of_measurement="°C",
+        mode=NumberSelectorMode.BOX,
+    )
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -144,19 +169,37 @@ class NestLocalOptionsFlow(OptionsFlowWithReload):
     """Behaviour options (the entry reloads when they change)."""
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        """Weather proxy and hot water boost length."""
+        """Weather proxy, hot water boost length and the weekly schedule."""
+        errors: dict[str, str] = {}
         if user_input is not None:
-            return self.async_create_entry(data=user_input)
-        options = self.config_entry.options
+            if (
+                user_input.get(CONF_SCHEDULE_ENTITY)
+                and user_input[CONF_HEAT_TEMPERATURE] <= user_input[CONF_SETBACK_TEMPERATURE]
+            ):
+                errors[CONF_HEAT_TEMPERATURE] = "heat_not_above_setback"
+            else:
+                return self.async_create_entry(data=user_input)
+        values = user_input or self.config_entry.options
         schema = vol.Schema(
             {
-                vol.Required(
-                    CONF_WEATHER, default=options.get(CONF_WEATHER, DEFAULT_WEATHER)
-                ): bool,
+                vol.Required(CONF_WEATHER, default=values.get(CONF_WEATHER, DEFAULT_WEATHER)): bool,
                 vol.Required(
                     CONF_HOT_WATER_BOOST,
-                    default=options.get(CONF_HOT_WATER_BOOST, DEFAULT_HOT_WATER_BOOST),
+                    default=values.get(CONF_HOT_WATER_BOOST, DEFAULT_HOT_WATER_BOOST),
                 ): vol.All(vol.Coerce(int), vol.Range(min=15, max=240)),
+                # Optional and cleared by emptying the field, hence no default.
+                vol.Optional(
+                    CONF_SCHEDULE_ENTITY,
+                    description={"suggested_value": values.get(CONF_SCHEDULE_ENTITY)},
+                ): EntitySelector(EntitySelectorConfig(domain="schedule")),
+                vol.Required(
+                    CONF_HEAT_TEMPERATURE,
+                    default=values.get(CONF_HEAT_TEMPERATURE, DEFAULT_HEAT_TEMPERATURE),
+                ): TEMPERATURE_SELECTOR,
+                vol.Required(
+                    CONF_SETBACK_TEMPERATURE,
+                    default=values.get(CONF_SETBACK_TEMPERATURE, DEFAULT_SETBACK_TEMPERATURE),
+                ): TEMPERATURE_SELECTOR,
             }
         )
-        return self.async_show_form(step_id="init", data_schema=schema)
+        return self.async_show_form(step_id="init", data_schema=schema, errors=errors)

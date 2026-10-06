@@ -11,11 +11,13 @@ from __future__ import annotations
 import logging
 
 from homeassistant.components import persistent_notification
+from homeassistant.components.climate import DOMAIN as CLIMATE_DOMAIN
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP, Platform
-from homeassistant.core import Event, HomeAssistant
+from homeassistant.core import Event, HomeAssistant, SupportsResponse
 from homeassistant.exceptions import ConfigEntryNotReady
-from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import config_validation as cv, device_registry as dr, service
+from homeassistant.helpers.typing import ConfigType
 
 from .const import CONF_HOST, CONF_PORT, DEFAULT_PORT, DOMAIN
 from .hub import NestLocalHub
@@ -30,24 +32,47 @@ PLATFORMS: list[Platform] = [
     Platform.SWITCH,
 ]
 
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
+SERVICE_GET_SCHEDULE = "get_schedule"
+
 type NestLocalConfigEntry = ConfigEntry[NestLocalHub]
 
 _SETUP_MESSAGE = {
     "en": (
         "Nest Local is listening on port {port}.\n\n"
-        "Point the thermostat at Home Assistant: SSH to the thermostat "
-        "(`ssh root@<thermostat IP>`), edit `/etc/nestlabs/client.config` and set\n\n"
-        '`<a key="cloudregisterurl" value="{url}"/>`\n\n'
-        "then reboot the thermostat. It sends its full state only after a reboot."
+        "Point the thermostat at Home Assistant by setting its cloudregisterurl to\n\n"
+        "`{url}`\n\n"
+        "The easiest way is the `tools/nest-to-ha.sh` script from the integration's "
+        "repository: it uses the thermostat's local API or SSH. By hand: set "
+        '`<a key="cloudregisterurl" value="{url}"/>` in '
+        "`/etc/nestlabs/client.config` on the thermostat and reboot it. "
+        "The thermostat sends its full state after a restart."
     ),
     "pl": (
         "Nest Local nasłuchuje na porcie {port}.\n\n"
-        "Skieruj termostat na Home Assistanta: zaloguj się przez SSH "
-        "(`ssh root@<IP termostatu>`), w pliku `/etc/nestlabs/client.config` ustaw\n\n"
-        '`<a key="cloudregisterurl" value="{url}"/>`\n\n'
-        "i zrestartuj termostat. Pełny stan wysyła tylko po restarcie."
+        "Skieruj termostat na Home Assistanta, ustawiając jego cloudregisterurl na\n\n"
+        "`{url}`\n\n"
+        "Najprościej zrobi to skrypt `tools/nest-to-ha.sh` z repozytorium integracji "
+        "(przez lokalne API termostatu albo SSH). Ręcznie: w pliku "
+        "`/etc/nestlabs/client.config` na termostacie ustaw "
+        '`<a key="cloudregisterurl" value="{url}"/>` i zrestartuj termostat. '
+        "Pełny stan termostat wysyła po restarcie."
     ),
 }
+
+
+async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
+    """Register the actions of the integration."""
+    service.async_register_platform_entity_service(
+        hass,
+        DOMAIN,
+        SERVICE_GET_SCHEDULE,
+        entity_domain=CLIMATE_DOMAIN,
+        schema=None,
+        func="async_get_schedule",
+        supports_response=SupportsResponse.ONLY,
+    )
+    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: NestLocalConfigEntry) -> bool:

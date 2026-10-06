@@ -11,10 +11,15 @@ CONF_HOST: Final = "host"
 CONF_PORT: Final = "port"
 CONF_WEATHER: Final = "weather_proxy"
 CONF_HOT_WATER_BOOST: Final = "hot_water_boost_minutes"
+CONF_SCHEDULE_ENTITY: Final = "schedule_entity"
+CONF_HEAT_TEMPERATURE: Final = "heat_temperature"
+CONF_SETBACK_TEMPERATURE: Final = "setback_temperature"
 
 DEFAULT_PORT: Final = 9544
 DEFAULT_WEATHER: Final = True
 DEFAULT_HOT_WATER_BOOST: Final = 60
+DEFAULT_HEAT_TEMPERATURE: Final = 21.0
+DEFAULT_SETBACK_TEMPERATURE: Final = 16.0
 
 STORAGE_VERSION: Final = 1
 SAVE_DELAY: Final = 30

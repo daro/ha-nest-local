@@ -45,6 +45,10 @@ MAX_RESEND_ATTEMPTS = 5
 # Unsolicited copies of server data (pairing buckets, zero-timestamp replies)
 # are not repeated more often than this per bucket.
 UNTRACKED_PUSH_INTERVAL = 300.0
+# The thermostat applies a new weekly schedule only after a quiet period
+# (pushes within 15 s are combined), so for a while it may still list its old
+# schedule. Re-sending during that time would only restart its wait.
+SCHEDULE_APPLY_SECONDS = 45.0
 
 # If the thermostat itself writes the key field, a not-yet-confirmed server
 # change of the companion fields is obsolete as well.
@@ -457,8 +461,15 @@ class BucketStore:
             bucket.value = {**bucket.value, **bucket.inflight}
             bucket.attempts = 0
             self._clear_inflight(bucket)
-        else:
+        elif not self._still_applying(bucket):
             self._requeue_inflight(bucket)
+
+    def _still_applying(self, bucket: Bucket) -> bool:
+        """True while the thermostat may still be applying a weekly schedule."""
+        return (
+            bucket.key.startswith("schedule.")
+            and self._clock() - bucket.inflight_since < SCHEDULE_APPLY_SECONDS
+        )
 
     def _resend_allowed(self, serial: str, bucket: Bucket) -> bool:
         bucket.attempts += 1
@@ -737,6 +748,10 @@ class BucketStore:
         return push
 
     def _ttl(self, key: str) -> float:
+        if key.startswith("schedule."):
+            # The weekly schedule is wanted state rather than a command: it is
+            # kept until the thermostat comes back, however long that takes.
+            return float("inf")
         if key.startswith("shared."):
             return min(self._pending_ttl, SHARED_PENDING_TTL_SECONDS)
         return self._pending_ttl
