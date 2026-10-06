@@ -197,7 +197,8 @@ reflash_hint() {
   if [ "$MODE" = "restore" ]; then
     say "    W kreatorze wybierz serwer, którego używałeś wcześniej."
   else
-    say "    W kreatorze wybierz Self-Hosted i własny serwer: IP $HA_IP, port $HA_PORT."
+    say "    W kreatorze wybierz Self-Hosted, potem zakładkę NLE Server (nie Home Assistant –"
+    say "    ta zawsze ustawia port 9543) i wpisz IP $HA_IP, port $HA_PORT."
   fi
 }
 

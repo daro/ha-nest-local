@@ -276,7 +276,7 @@ async def test_firmware_without_api_or_ssh(run_script: RunScript) -> None:
     assert code == 1
     assert "brak lokalnego API NLE" in out
     assert "starsza wersja" in out
-    assert "Self-Hosted" in out
+    assert "zakładkę NLE Server" in out
 
 
 # ----------------------------------------------------------------- over SSH

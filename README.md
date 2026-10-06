@@ -106,8 +106,9 @@ vi /etc/nestlabs/client.config
 reboot
 ```
 
-**Starszy firmware NLE** (bez API i SSH): wgraj aktualny instalatorem NoLongerEvil i w kreatorze
-wybierz Self-Hosted z adresem i portem integracji.
+**Starszy firmware NLE** (bez API i SSH): wgraj aktualny instalatorem NoLongerEvil (wersja 1.0.1
+lub nowsza). W kreatorze wybierz Self-Hosted, potem zakładkę **NLE Server** (nie Home Assistant –
+ta zawsze ustawia port 9543 dodatku NLE) i wpisz adres HA oraz port integracji (9544).
 
 ### Po przepięciu
 
